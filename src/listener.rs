@@ -98,7 +98,7 @@ impl VsockListener {
         loop {
             let mut guard = ready!(self.inner.poll_read_ready(cx))?;
 
-            match guard.try_io(|inner| inner.get_ref().accept()) {
+            match guard.try_io(|inner| Ok(inner.get_ref().accept()?)) {
                 Ok(Ok((inner, addr))) => return Ok((inner, addr)).into(),
                 // continue on interrupt...
                 Ok(Err(ref e)) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -110,7 +110,7 @@ impl VsockListener {
 
     /// The local address that this listener is bound to.
     pub fn local_addr(&self) -> Result<SockAddr> {
-        self.inner.get_ref().local_addr()
+        Ok(self.inner.get_ref().local_addr()?)
     }
 
     /// Consumes this listener, returning a stream of the sockets this listener

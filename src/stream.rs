@@ -45,10 +45,10 @@
 
 use std::io::{Error, Read, Result, Write};
 use std::net::Shutdown;
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 
 use crate::split::{split as new_split, ReadHalf, WriteHalf};
-use crate::{SockAddr, VsockAddr};
+use crate::SockAddr;
 use futures::ready;
 use libc::*;
 use std::mem::{self, size_of};
@@ -73,40 +73,8 @@ impl VsockStream {
 
     /// Open a connection to a remote host.
     pub async fn connect(cid: u32, port: u32) -> Result<Self> {
-        let vsock_addr = VsockAddr::new(cid, port);
-
-        let socket = unsafe { socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC, 0) };
-        if socket < 0 {
-            return Err(Error::last_os_error());
-        }
-
-        if unsafe { fcntl(socket, F_SETFL, O_NONBLOCK) } < 0 {
-            let _ = unsafe { close(socket) };
-            return Err(Error::last_os_error());
-        }
-
-        if unsafe {
-            connect(
-                socket,
-                &vsock_addr as *const _ as *const sockaddr,
-                size_of::<sockaddr_vm>() as u32,
-            )
-        } < 0
-        {
-            let err = Error::last_os_error();
-            if let Some(os_err) = err.raw_os_error() {
-                // Connect hasn't finished, that's fine.
-                if os_err != EINPROGRESS {
-                    // Close the socket if we hit an error, ignoring the error
-                    // from closing since we can't pass back two errors.
-                    let _ = unsafe { close(socket) };
-                    return Err(err);
-                }
-            }
-        }
-
         loop {
-            let stream = unsafe { vsock::VsockStream::from_raw_fd(socket) };
+            let stream = vsock::VsockStream::connect_with_cid_port(cid, port)?;
             let stream = Self::new(stream)?;
             let mut guard = stream.inner.writable().await?;
 
@@ -143,17 +111,17 @@ impl VsockStream {
 
     /// The local address that this socket is bound to.
     pub fn local_addr(&self) -> Result<SockAddr> {
-        self.inner.get_ref().local_addr()
+        self.inner.get_ref().local_addr().map_err(Into::into)
     }
 
     /// The remote address that this socket is connected to.
     pub fn peer_addr(&self) -> Result<SockAddr> {
-        self.inner.get_ref().peer_addr()
+        self.inner.get_ref().peer_addr().map_err(Into::into)
     }
 
     /// Shuts down the read, write, or both halves of this connection.
     pub fn shutdown(&self, how: Shutdown) -> Result<()> {
-        self.inner.get_ref().shutdown(how)
+        self.inner.get_ref().shutdown(how).map_err(Into::into)
     }
 
     /// Splits a single value implementing `AsyncRead + AsyncWrite` into separate
@@ -169,7 +137,7 @@ impl VsockStream {
         loop {
             let mut guard = ready!(self.inner.poll_write_ready(cx))?;
 
-            match guard.try_io(|inner| inner.get_ref().write(buf)) {
+            match guard.try_io(|inner| inner.get_ref().write(buf).map_err(Into::into)) {
                 Ok(Ok(n)) => return Ok(n).into(),
                 Ok(Err(ref e)) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Ok(Err(e)) => return Err(e).into(),
@@ -191,7 +159,7 @@ impl VsockStream {
         loop {
             let mut guard = ready!(self.inner.poll_read_ready(cx))?;
 
-            match guard.try_io(|inner| inner.get_ref().read(b)) {
+            match guard.try_io(|inner| inner.get_ref().read(b).map_err(Into::into)) {
                 Ok(Ok(n)) => {
                     unsafe {
                         buf.assume_init(n);
@@ -225,7 +193,7 @@ impl IntoRawFd for VsockStream {
 
 impl Write for VsockStream {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        self.inner.get_ref().write(buf)
+        self.inner.get_ref().write(buf).map_err(Into::into)
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -235,7 +203,7 @@ impl Write for VsockStream {
 
 impl Read for VsockStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.inner.get_ref().read(buf)
+        self.inner.get_ref().read(buf).map_err(Into::into)
     }
 }
 
