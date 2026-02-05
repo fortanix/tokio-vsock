@@ -78,7 +78,14 @@ impl VsockStream {
         if socket < 0 {
             return Err(Error::last_os_error());
         }
+        Self::connect_with_socket(socket, addr).await
+    }
 
+    /// Open a connection to a remote host using an existing socket.
+    ///
+    /// The socket will be set to non-blocking mode and close-on-exec.
+    pub async fn connect_with_socket(socket: impl IntoRawFd, addr: VsockAddr) -> Result<Self> {
+        let socket = socket.into_raw_fd();
         if unsafe { fcntl(socket, F_SETFL, O_NONBLOCK | O_CLOEXEC) } < 0 {
             let _ = unsafe { close(socket) };
             return Err(Error::last_os_error());
